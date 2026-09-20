@@ -81,10 +81,13 @@ Sewells Point sits in Norfolk, Virginia, at the mouth of Chesapeake Bay, and has
 
 ```{julia}
 #| solution: false
-station = "8638610"                                                    # <1>
+station = 
+"9410660"
+# "8638610"                                                    # <1>
 record = load_water_level(
     station;
-    name="Sewells Point",
+    # name="Sewells Point",
+    name="Los Angeles",
     cache=joinpath(@__DIR__, "$station-hourly.csv"),                   # <2>
 )
 ```
@@ -201,11 +204,14 @@ function negative_loglik(θ, y)
     return -sum(my_gev_logpdf(yᵢ, μ, exp(log_σ), ξ) for yᵢ in y)       # <1>
 end
 
-θ₀ = [mean(y), log(std(y)), 0.1]                                       # <2>
+# θ₀ = [mean(y), log(std(y)), 0.1]                                       # <2>
+θ₀ = [mean(y), log(std(y)), -0.1]                                       # <2>
+# @printf("mean= %.3f, log(σ) = %.3f\n", mean(y), log(std(y)))
+# θ₀ = [mean(y)-100, log(std(y))+100, 10]  
 result = optimize(θ -> negative_loglik(θ, y), θ₀, NelderMead())
 μ̂, log_σ̂, ξ̂ = Optim.minimizer(result)
 
-@printf("converged: %s\n", Optim.converged(result))                    # <3>
+@printf(" rged: %s\n", Optim.converged(result))                    # <3>
 @printf("by hand:   μ = %.3f, σ = %.3f, ξ = %.3f\n", μ̂, exp(log_σ̂), ξ̂)
 @printf("gevfit:    μ = %.3f, σ = %.3f, ξ = %.3f\n", fit_mle.μ, fit_mle.σ, fit_mle.ξ)
 ```
@@ -392,10 +398,16 @@ Choose a few return periods, state what you believe about the level at each, and
 ```{julia}
 #| solution: false
 #| output: false
+# quantile_beliefs = [                                                   # <1>
+#     (period=2, belief=Normal(5.0, 1.0)),
+#     (period=100, belief=Normal(8.0, 2.5)),
+#     (period=500, belief=Normal(9.5, 4.0)),
+# ]
+
 quantile_beliefs = [                                                   # <1>
-    (period=2, belief=Normal(5.0, 1.0)),
-    (period=100, belief=Normal(8.0, 2.5)),
-    (period=500, belief=Normal(9.5, 4.0)),
+    (period=2, belief=Normal(4.6, 1.0)),
+    (period=100, belief=Normal(5.0, 2.5)),
+    (period=500, belief=Normal(5.3, 4.0)),
 ]
 
 @model function gev_quantile(y, beliefs)
@@ -447,11 +459,12 @@ A prior predictive check that produces a narrow band means the prior determines 
 ```{julia}
 #| solution: false
 #| output: false
+rng = MersenneTwister(543)
 chain_vague = sample(
     rng, gev_vague(y), NUTS(0.99), MCMCThreads(), 1_000, 4; progress=false        # <1>
 )
 chain_quantile = sample(
-    rng, gev_quantile(y, quantile_beliefs), NUTS(0.99), MCMCThreads(), 1_000, 4;  # <2>
+    rng, gev_quantile(y, quantile_beliefs), NUTS(0.999), MCMCThreads(), 1_000, 4;  # <2>
     progress=false,
 )
 ```
@@ -562,8 +575,21 @@ Look at your gauge's record before choosing new numbers, and say what you change
 
 **Your answer.**
 
-> *Answer here*
+> I chose the station at Los Angeles and reran the notebook from the beginning. The first problem occurred in the hand-written maximum-likelihood optimization: the optimizer did not converge. The gevfit estimate suggested a negative GEV shape parameter $\xi$. This is also consistent with the relatively stable annual maximum water-level record at Los Angeles. Therefore, I changed the initial value of (\xi) from (0.1) to (-0.1) to provide the optimizer with a more reasonable starting point. After this change, the optimizer converged, and the hand-written MLE and gevfit produced essentially the same parameter estimates, indicating that the hand-written likelihood was working correctly.
+The Bayesian diagnostics were more problematic at first. For the vague prior, the worst $\hat R$ was 4.005 and the smallest ESS was 8, indicating that the chains had not converged and that this posterior was not trustworthy. The quantile-prior chains mixed much better, with $\hat R$ close to 1 and much larger ESS, although there were still three divergences.
+Because the original quantile beliefs were designed for Sewells Point, I inspected the Los Angeles annual maxima and the fitted return-level curves from the MLE, L-moment, and hand-written fits. The observed and fitted levels were lower than those at Sewells Point, so I changed the quantile beliefs to
 
+$$
+\begin{aligned}
+x_2 &\sim N(4.6,1.0^2),\\
+x_{100} &\sim N(5.0,2.5^2),\\
+x_{500} &\sim N(5.3,4.0^2).
+\end{aligned}
+$$
+
+These priors are more consistent with the physical scale of the Los Angeles gauge. After changing the beliefs, the quantile-prior chain had a worst (\hat R=1.000), a smallest ESS of 1850, and three divergences. Thus, changing the prior made it more physically appropriate but did not by itself eliminate the sampling problem.
+I then increased the NUTS target acceptance rate from 0.99 to 0.999, which makes the sampler use smaller, more conservative steps near the parameter-dependent GEV support boundary. After this change, the quantile-prior fit had zero divergences, a worst $\hat R=1.002$, and a smallest ESS of 1971. These diagnostics indicate that the final quantile-prior posterior is much more trustworthy.
+As a reproducibility note, I reset the random number generator to the same fixed seed before testing different settings. This allowed me to rerun only the relevant cells when testing different initial values or NUTS settings, rather than rerunning the entire notebook from the beginning, while keeping the results reproducible.
 
 ### The shape parameter
 
@@ -574,8 +600,11 @@ They should agree closely on $\mu$ and $\sigma$ and less closely on $\xi$.
 Explain why $\xi$ is the least well determined, and say which of the three you would report to a client and why.
 
 **Your answer.**
-
-> *Answer here*
+The results are as follows:
+MLE:       μ = 4.575, σ = 0.156, ξ = -0.176
+L-moments: μ = 4.578, σ = 0.157, ξ = -0.213
+by hand:   μ = 4.575, σ = 0.156, ξ = -0.176
+$\xi$ is the least well determined because it controls the tail behavior of the GEV distribution and is mainly estimated from a small number of extreme observations. With a limited record, its estimate can therefore be unstable. I would report the L-moment estimate because it is relatively robust for small samples. L-moments use linear combinations of ordered observations, which reduces the influence of a few unusual extreme values.
 
 
 ### Sensitivity to the prior
@@ -587,7 +616,7 @@ Using your prior predictive figures and your posterior intervals, say whether th
 
 **Your answer.**
 
-> *Answer here*
+> The 500-year return level and its credible interval under the vague prior are 5.14 and [5.10, 5.37], while under the quantile prior they are 5.20 and [5.09, 5.44]. The two posterior estimates are very similar, and the vague prior does not produce greater posterior uncertainty, which is opposite to the Sewells Point case. This may be because, in LA, the annual maxima are relatively concentrated, so the data provide a relatively strong constraint on the plausible GEV fits. Therefore, the posterior is mainly determined by the likelihood. In contrast, the more informative quantile prior introduces additional prior information that is not perfectly aligned with the observations, so the posterior has to balance the prior information with the likelihood, which may lead to slightly greater uncertainty. In this case, the result supports the idea that the vague prior allows the data to “speak for themselves.
 
 
 ### Reading a failed diagnostic
@@ -599,7 +628,7 @@ Say what the two numbers mean, whether the estimate can be used, and what you wo
 
 **Your answer.**
 
-> *Answer here*
+> $\hat R $ measures whether multiple MCMC chains have converged to the same posterior distribution by comparing the variation within and between chains. An $\hat R $ of 1.08, which is larger than 1.01, indicates poor convergence. The 47 divergences indicate that it is difficult in exploring the posterior distribution. Therefore, I would not consider the parameter estimates plausible, and I would not use the reported 100-year return level. Based on my own experiments, I would first check whether the prior settings are reasonable. I would also adjust NUTS by increasing the target acceptance rate so that it takes smaller and more conservative steps, and then check whether $\hat R $ approaches 1 and the divergences decrease.
 
 
 ### Reporting a design value
@@ -610,7 +639,9 @@ State the number and say what it rests on: which estimator, which detrending cho
 
 **Your answer.**
 
-> *Answer here*
+> I would report the 100-year return level as 5.04 [4.91, 5.18] ft, based on the bootstrap results using the L-moment fit with MSL detrending. This estimate does not involve a prior.
+I chose MSL detrending rather than linear detrending because I think the long-term change in water level is more naturally related to physical changes in the local mean sea level. Also, from the scatter plot, I do not observe a strong linear trend.
+I chose the bootstrap result because I do not have enough physical knowledge about this gauge to specify a reliable prior. An inappropriate prior could introduce additional bias into the estimate. However, in a real application, if I get sufficient physical knowledge or reliable prior information, I would prefer the Bayesian approach. But for this experiment, I would prefer to rely more directly on the observed data.
 
 
 ## Turning it in
